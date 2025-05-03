@@ -19,6 +19,7 @@ export namespace OpenAIWire_ContentParts {
 
   /// Content parts - Input
 
+  export type TextContentPart = z.infer<typeof TextContentPart_schema>;
   const TextContentPart_schema = z.object({
     type: z.literal('text'),
     text: z.string(),
@@ -88,6 +89,18 @@ export namespace OpenAIWire_ContentParts {
     PredictedFunctionCall_schema,
   ]);
 
+  /// Annotation - Output - maybe not even content parts
+
+  export const OpenAI_AnnotationObject_schema = z.object({
+    type: z.literal('url_citation'),
+    url_citation: z.object({
+      start_index: z.number().optional(),
+      end_index: z.number().optional(),
+      title: z.string(),
+      url: z.string(),
+    }),
+  });
+
 }
 
 export namespace OpenAIWire_Messages {
@@ -115,7 +128,7 @@ export namespace OpenAIWire_Messages {
     // name: _optionalParticipantName,
   });
 
-  const AssistantMessage_schema = z.object({
+  export const AssistantMessage_schema = z.object({
     role: z.literal('assistant'),
     /**
      * The contents of the assistant message. Required unless tool_calls or function_call is specified.
@@ -143,27 +156,9 @@ export namespace OpenAIWire_Messages {
     audio: z.object({
       id: z.string(),
     }).nullable().optional(),
-    // name: _optionalParticipantName,
-  });
 
-  export const AssistantMessage_NS_schema = AssistantMessage_schema.extend({
-    //
-    // IMPORTANT - this message *extends* the AssistantMessage_schema, to inherit all fields while performing any other change
-    //
-
-    // .optional: when parsing a non-streaming message with just a FC, the content can be missing
-    content: z.string().nullable().optional(),
-
-    /**
-     * [OpenAI, 2024-10-17] Audio output (non-streaming only)
-     * If the audio output modality is requested, this object contains data about the audio response from the model
-     */
-    audio: z.object({
-      id: z.string(),
-      data: z.string(), // Base64 encoded audio data
-      expires_at: z.number(), // Unix timestamp
-      transcript: z.string().optional(),
-    }).nullable().optional(),
+    // function_call: // ignored, as it's deprecated
+    // name: _optionalParticipantName, // omitted by choice: generally unsupported
   });
 
   const ToolMessage_schema = z.object({
@@ -287,6 +282,7 @@ export namespace OpenAIWire_API_Chat_Completions {
       include_usage: z.boolean().optional(), // If set, an additional chunk will be streamed with a 'usage' field on the entire request.
     }).optional(),
     reasoning_effort: z.enum(['low', 'medium', 'high']).optional(), // [OpenAI, 2024-12-17] reasoning effort, o1 models only for now
+    include_reasoning: z.boolean().optional(), // [OpenRouter, 2025-01-24] enables reasoning tokens
     prediction: z.object({ // [OpenAI, 2024-11-05] Predicted Outputs - for regenerating a file with only minor changes to most of the content.
       type: z.literal('content'),
       content: z.union([z.string(), z.array(OpenAIWire_ContentParts.ContentPart_schema)]),
@@ -325,6 +321,25 @@ export namespace OpenAIWire_API_Chat_Completions {
         }),
       }),
     ]).optional(),
+    web_search_options: z.object({
+      /**
+       * High level guidance for the amount of context window space to use for the search. One of low, medium, or high. medium is the default.
+       */
+      search_context_size: z.enum(['low', 'medium', 'high']).optional(),
+      /**
+       * Approximate location parameters for the search.
+       */
+      user_location: z.object({
+        type: z.literal('approximate'),
+        approximate: z.object({
+          city: z.string().optional(),      // free text for the city of the user, e.g. 'San Francisco'
+          country: z.string().optional(),   // two-letter ISO country code of the user, e.g. 'US'
+          region: z.string().optional(),    // free text, e.g. 'California'
+          timezone: z.string().optional(),  // IANA timezone of the user, e.g. 'America/Los_Angeles'
+        }),
+      }).nullable().optional(),
+    }).optional(),
+
     seed: z.number().int().optional(),
     stop: z.array(z.string()).optional(), // Up to 4 sequences where the API will stop generating further tokens.
     user: z.string().optional(),
@@ -379,7 +394,8 @@ export namespace OpenAIWire_API_Chat_Completions {
 
     // [OpenAI o1, 2024-09-12] breaks down the completion tokens into components
     completion_tokens_details: z.object({
-      reasoning_tokens: z.number(),
+      reasoning_tokens: z.number().optional(), // [Discord, 2024-04-10] reported missing
+      // text_tokens: z.number().optional(), // [Discord, 2024-04-10] revealed as present on custom OpenAI endpoint - not using it here yet
       audio_tokens: z.number().optional(), // [OpenAI, 2024-10-01] audio tokens used in the completion (charged at a different rate)
       accepted_prediction_tokens: z.number().optional(), // [OpenAI, 2024-11-05] Predicted Outputs
       rejected_prediction_tokens: z.number().optional(), // [OpenAI, 2024-11-05] Predicted Outputs
@@ -390,12 +406,46 @@ export namespace OpenAIWire_API_Chat_Completions {
     prompt_cache_miss_tokens: z.number().optional(),
   }).nullable();
 
+  /**
+   * NOTE: this is effectively the OUTPUT message (from the Chat Completion output object).
+   * - 2025-03-11: the docs show that 'role' is not mandated to be 'assistant' anymore and could be different
+   */
+  const ChoiceMessage_NS_schema = OpenAIWire_Messages.AssistantMessage_schema.extend({
+    //
+    // IMPORTANT - this message *extends* the AssistantMessage_schema, to inherit all fields while performing any other change
+    //
+
+    // .string, instead of .assistant -- but we keep it strict for now, for parser correctness
+    // role: z.string(),
+
+    // .optional: when parsing a non-streaming message with just a FC, the content can be missing
+    content: z.string().nullable().optional(),
+
+    /**
+     * [OpenAI, 2025-03-11] Annotations
+     * This is a full assistant message, which is parsed by the non-streaming parser.
+     */
+    annotations: z.array(OpenAIWire_ContentParts.OpenAI_AnnotationObject_schema).nullable().optional(),
+
+    /**
+     * [OpenAI, 2024-10-17] Audio output (non-streaming only)
+     * If the audio output modality is requested, this object contains data about the audio response from the model
+     */
+    audio: z.object({
+      id: z.string(),
+      data: z.string(), // Base64 encoded audio data
+      expires_at: z.number(), // Unix timestamp
+      transcript: z.string().optional(),
+    }).nullable().optional(),
+
+  });
+
   const Choice_NS_schema = z.object({
     index: z.number(),
 
     // NOTE: the OpenAI api does not force role: 'assistant', it's only induced
     // We recycle the assistant message response here, with either content or tool_calls
-    message: OpenAIWire_Messages.AssistantMessage_NS_schema,
+    message: ChoiceMessage_NS_schema,
 
     finish_reason: z.union([FinishReason_Enum, z.string()])
       .nullable(),
@@ -424,6 +474,9 @@ export namespace OpenAIWire_API_Chat_Completions {
     // undocumented messages that are not part of the official schema, but can be found when the server sends and error
     error: z.any().optional(),
     warning: z.unknown().optional(),
+
+    // [Perplexity] String array of citations, the first element is the first reference, i.e. '[1]'.
+    citations: z.array(z.any()).optional(),
   });
 
   /// Streaming Response
@@ -479,10 +532,18 @@ export namespace OpenAIWire_API_Chat_Completions {
       .nullable(), // [Deepseek] added .nullable()
     // delta-text content
     content: z.string().nullable().optional(),
+    // delta-reasoning content
+    reasoning_content: z.string().nullable().optional(), // [Deepseek, 2025-01-20]
+    reasoning: z.string().nullable().optional(), // [OpenRouter, 2025-01-24]
     // delta-tool-calls content
     tool_calls: z.array(ChunkDeltaToolCalls_schema).optional()
       .nullable(), // [TogetherAI] added .nullable(), see https://github.com/togethercomputer/together-python/issues/160
     refusal: z.string().nullable().optional(), // [OpenAI, 2024-10-01] refusal message
+    /**
+     * [OpenAI, 2025-03-11] Annotations
+     * not documented yet in the API guide; shall improve this once defined
+     */
+    annotations: z.array(OpenAIWire_ContentParts.OpenAI_AnnotationObject_schema).optional(),
   });
 
   const ChunkChoice_schema = z.object({
@@ -505,7 +566,8 @@ export namespace OpenAIWire_API_Chat_Completions {
       'chat.completion.chunk',
       'chat.completion', // [Perplexity] sent an email on 2024-07-14 to inform them about the misnomer
       '', // [Azure] bad response: the first packet communicates 'prompt_filter_results'
-    ]),
+    ])
+      .optional(), // [FastAPI, 2025-04-24] the FastAPI dialect sadly misses the 'chat.completion.chunk' type
     id: z.string(),
 
     /**
@@ -517,7 +579,8 @@ export namespace OpenAIWire_API_Chat_Completions {
 
     model: z.string(), // The model used for the chat completion.
     usage: Usage_schema.optional(), // If requested
-    created: z.number(), // The Unix timestamp (in seconds) of when the chat completion was created.
+    created: z.number() // The Unix timestamp (in seconds) of when the chat completion was created.
+      .optional(), // [FastAPI, 2025-04-24] the FastAPI dialect sadly misses the 'created' field
     system_fingerprint: z.string().optional() // The backend configuration that the model runs with.
       .nullable(), // [Grow, undocumented OpenAI] fingerprint is null on some OpenAI examples too
     // service_tier: z.unknown().optional(),
@@ -540,6 +603,9 @@ export namespace OpenAIWire_API_Chat_Completions {
       }).optional(),
       queue_length: z.number().optional(),
     }).optional(),
+
+    // [Perplexity] String array of citations, the first element is the first reference, i.e. '[1]'.
+    citations: z.array(z.any()).optional(),
   });
 
 }
@@ -553,41 +619,146 @@ export namespace OpenAIWire_API_Images_Generations {
 
   export type Request = z.infer<typeof Request_schema>;
   const Request_schema = z.object({
-    // The maximum length is 1000 characters for dall-e-2 and 4000 characters for dall-e-3
-    prompt: z.string().max(4000),
 
-    // The model to use for image generation
-    model: z.enum(['dall-e-2', 'dall-e-3']).optional().default('dall-e-2'),
+    // 32,000 for gpt-image-1, 4,000 for dall-e-3, 1,000 for dall-e-2
+    prompt: z.string().max(32000),
+
+    model: z.enum([
+      'gpt-image-1',
+      'dall-e-3',
+      'dall-e-2', // default
+    ]).optional(),
 
     // The number of images to generate. Must be between 1 and 10. For dall-e-3, only n=1 is supported.
     n: z.number().min(1).max(10).nullable().optional(),
 
-    // 'hd' creates images with finer details and greater consistency across the image. This param is only supported for dall-e-3
-    quality: z.enum(['standard', 'hd']).optional(),
+    // Image quality
+    quality: z.enum([
+      'auto',                   // default
+      'high', 'medium', 'low',  // gpt-image-1
+      'hd', 'standard',         // dall-e-3: hd | standard, dall-e-2: only standard
+    ]).optional(),
+
+    // The format in which generated images with dall-e-2 and dall-e-3 are returned.
+    //`gpt-image-1` will always return base64-encoded images and does NOT support this parameter.
+    response_format: z.enum(['url', 'b64_json']).optional(),
+
+    // size of the generated images
+    size: z.enum([
+      'auto',       // GI (or default if omitted)
+      '256x256',    //          D2
+      '512x512',    //          D2
+      '1024x1024',  // GI  D3  D2
+      // landscape
+      '1536x1024',  // GI
+      '1792x1024',  //      D3
+      // portrait
+      '1024x1536',  // GI
+      '1024x1792',  //      D3
+    ]).optional(),
+
+    // optional unique identifier representing your end-user
+    user: z.string().optional(),
+
+
+    // -- GPT Image 1 Specific Parameters --
+
+    // Allows to set transparency (in that case, format = png or webp)
+    background: z.enum(['transparent', 'opaque', 'auto' /* default */]).optional(),
+
+    // Control the content-moderation level for images generated by gpt-image-1.
+    moderation: z.enum(['low', 'auto' /* default */]).optional(),
 
     // The format in which the generated images are returned
-    response_format: z.enum(['url', 'b64_json']).optional(), //.default('url'),
+    output_format: z.enum(['png' /* default */, 'jpeg', 'webp']).optional(),
 
-    // 'dall-e-2': must be one of 256x256, 512x512, or 1024x1024
-    // 'dall-e-3': must be one of 1024x1024, 1792x1024, or 1024x1792
-    size: z.enum(['256x256', '512x512', '1024x1024', '1792x1024', '1024x1792']).optional().default('1024x1024'),
+    // WEBP/JPEG compression level for gpt-image-1
+    output_compression: z.number().min(0).max(100).int().optional(),
 
-    // only used by 'dall-e-3': 'vivid' (hyper-real and dramatic images) or 'natural'
-    style: z.enum(['vivid', 'natural']).optional().default('vivid'),
 
-    // A unique identifier representing your end-user
-    user: z.string().optional(),
+    // -- Dall-E 3 Specific Parameters --
+
+    // DALL-E 3 ONLY - style - defaults to vivid
+    style: z.enum(['vivid', 'natural']).optional(),
+
   });
 
   export type Response = z.infer<typeof Response_schema>;
   export const Response_schema = z.object({
     created: z.number(),
     data: z.array(z.object({
-      url: z.string().url().optional(),
       b64_json: z.string().optional(),
       revised_prompt: z.string().optional(),
+      url: z.string().url().optional(), // if the response_format is 'url' - DEPRECATED
     })),
+
+    // gpt-image-1 only
+    usage: z.object({
+      total_tokens: z.number(),
+      input_tokens: z.number(), // images + text tokens in the input prompt
+      output_tokens: z.number(), // image tokens in the output image
+      input_tokens_details: z.object({
+        text_tokens: z.number(),
+        image_tokens: z.number().optional(), // present if editing
+      }).optional(),
+    }).optional(),
   });
+
+}
+
+// Images > Edit Image
+export namespace OpenAIWire_API_Images_Edits {
+
+  export type Request = z.infer<typeof Request_schema>;
+
+  /**
+   * This API method only accepts 'multipart/form-data' requests.
+   * The request body must be a FormData object, which we build outside.
+   * The spec below represents the first part.
+   */
+  export const Request_schema = z.object({
+
+    // 32,000 for gpt-image-1, 1,000 for dall-e-2
+    prompt: z.string().max(32000),
+
+    // image: file | file[] - REQUIRED - Handled as file uploads in FormData ('image' field)
+
+    // mask: file - OPTIONAL - Handled as file upload in FormData ('mask' field)
+
+    model: z.enum(['gpt-image-1', 'dall-e-2']).optional(),
+
+    // Number of images to generate, between 1 and 10
+    n: z.number().min(1).max(10).nullable().optional(),
+
+    // Image quality
+    quality: z.enum([
+      'auto',                   // default
+      'high', 'medium', 'low',  // gpt-image-1
+      'standard',               // dall-e-2: only standard
+    ]).optional(),
+
+    // response_format: string - OPTIONAL - Defaults to 'url'. Only for DALL-E 2. gpt-image-1 always returns b64_json.
+    // OMITTED here as we'll enforce b64_json or handle it based on model if DALL-E 2 edit were supported.
+
+    // size of the generated images
+    size: z.enum([
+      'auto',       // GI (or default if omitted)
+      '256x256',    //          D2
+      '512x512',    //          D2
+      '1024x1024',  // GI       D2
+      // landscape
+      '1536x1024',  // GI
+      // portrait
+      '1024x1536',  // GI
+    ]).optional(),
+
+    // optional unique identifier representing your end-user
+    user: z.string().optional(),
+
+  });
+
+  // The response schema is identical to OpenAIWire_API_Images_Generations.Response_schema
+  export type Response = OpenAIWire_API_Images_Generations.Response;
 
 }
 

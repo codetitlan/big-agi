@@ -2,7 +2,7 @@ import * as React from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
 import type { DLLM } from '~/common/stores/llms/llms.types';
-import type { DModelsService, DModelsServiceId } from '~/common/stores/llms/modelsservice.types';
+import type { DModelsService, DModelsServiceId } from '~/common/stores/llms/llms.service.types';
 import { useShallowStabilizer } from '~/common/util/hooks/useShallowObject';
 import { useModelsStore } from '~/common/stores/llms/store-llms';
 
@@ -19,7 +19,7 @@ export function useServiceSetup<TServiceSettings extends object, TAccess>(servic
   service: DModelsService<TServiceSettings> | null;
   serviceAccess: TAccess;
 
-  serviceHasBackendCap: boolean;
+  serviceHasCloudTenantConfig: boolean;
   serviceHasLLMs: boolean;
   serviceHasVisibleLLMs: boolean;
   serviceSetupValid: boolean;
@@ -46,7 +46,7 @@ export function useServiceSetup<TServiceSettings extends object, TAccess>(servic
       service,
       serviceAccess,
 
-      serviceHasBackendCap: vendorHasBackendCap(vendor),
+      serviceHasCloudTenantConfig: vendorHasBackendCap(vendor),
       serviceHasLLMs: !!serviceLLms.length,
       serviceHasVisibleLLMs: !!serviceLLms.find(llm => !llm.hidden),
       serviceSetupValid: serviceSetupValid,

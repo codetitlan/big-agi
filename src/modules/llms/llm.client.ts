@@ -1,10 +1,8 @@
-import { sendGAEvent } from '@next/third-parties/google';
+import { hasGoogleAnalytics, sendGAEvent } from '~/common/components/3rdparty/GoogleAnalytics';
 
-import { hasGoogleAnalytics } from '~/common/components/GoogleAnalytics';
-
-import type { DModelsService, DModelsServiceId } from '~/common/stores/llms/modelsservice.types';
-import { DLLM, LLM_IF_OAI_Chat, LLM_IF_OAI_Fn } from '~/common/stores/llms/llms.types';
-import { FALLBACK_LLM_PARAM_TEMPERATURE } from '~/common/stores/llms/llms.parameters';
+import type { DModelsService, DModelsServiceId } from '~/common/stores/llms/llms.service.types';
+import { DLLM, LLM_IF_HOTFIX_NoTemperature, LLM_IF_OAI_Chat, LLM_IF_OAI_Fn } from '~/common/stores/llms/llms.types';
+import { applyModelParameterInitialValues, FALLBACK_LLM_PARAM_TEMPERATURE } from '~/common/stores/llms/llms.parameters';
 import { isModelPricingFree } from '~/common/stores/llms/llms.pricing';
 import { llmsStoreActions } from '~/common/stores/llms/store-llms';
 
@@ -23,11 +21,11 @@ export async function llmsUpdateModelsForServiceOrThrow(serviceId: DModelsServic
   const data = await vendor.rpcUpdateModelsOrThrow(transportAccess);
 
   // update the global models store
-  llmsStoreActions().setLLMs(
-    data.models.map(model => _createDLLMFromModelDescription(model, service)),
+  llmsStoreActions().setServiceLLMs(
     service.id,
-    true,
+    data.models.map(model => _createDLLMFromModelDescription(model, service)),
     keepUserEdits,
+    false,
   );
 
   // figure out which vendors are actually used and useful
@@ -53,9 +51,12 @@ function _createDLLMFromModelDescription(d: ModelDescriptionSchema, service: DMo
   const llmResponseTokensRatio = d.maxCompletionTokens ? 1 : 1 / 4;
   const llmResponseTokens = maxOutputTokens ? Math.round(maxOutputTokens * llmResponseTokensRatio) : null;
 
-  // create the object
+  // DLLM is a fundamental type in our application
   const dllm: DLLM = {
-    id: `${service.id}-${d.id}`,
+
+    // this id is Big-AGI specific, not the vendor's
+    id: !d.idVariant ? `${service.id}-${d.id}`
+      : `${service.id}-${d.id}-${d.idVariant}`,
 
     // editable properties
     label: d.label,
@@ -75,8 +76,8 @@ function _createDLLMFromModelDescription(d: ModelDescriptionSchema, service: DMo
     // parameters system (spec and initial values)
     parameterSpecs: d.parameterSpecs?.length ? d.parameterSpecs : [],
     initialParameters: {
-      llmRef: d.id,
-      llmTemperature: FALLBACK_LLM_PARAM_TEMPERATURE,
+      llmRef: d.id, // this is the vendor model id
+      llmTemperature: d.interfaces.includes(LLM_IF_HOTFIX_NoTemperature) ? null : FALLBACK_LLM_PARAM_TEMPERATURE,
       llmResponseTokens: llmResponseTokens,
     },
 
@@ -89,6 +90,10 @@ function _createDLLMFromModelDescription(d: ModelDescriptionSchema, service: DMo
     // userHidden: undefined,
     // userParameters: undefined,
   };
+
+  // set other params from spec
+  if (dllm.parameterSpecs?.length)
+    applyModelParameterInitialValues(dllm.initialParameters, dllm.parameterSpecs, false);
 
   // set the pricing
   if (d.chatPrice && typeof d.chatPrice === 'object') {

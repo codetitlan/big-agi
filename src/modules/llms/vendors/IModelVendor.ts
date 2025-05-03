@@ -5,7 +5,7 @@ import type { SvgIconProps } from '@mui/joy';
 import type { BackendCapabilities } from '~/modules/backend/store-backend-capabilities';
 
 import type { DLLM } from '~/common/stores/llms/llms.types';
-import type { DModelsServiceId } from '~/common/stores/llms/modelsservice.types';
+import type { DModelsServiceId } from '~/common/stores/llms/llms.service.types';
 
 import type { ModelDescriptionSchema } from '../server/llm.server.types';
 import type { ModelVendorId } from './vendors.registry';
@@ -19,8 +19,8 @@ export interface IModelVendor<TServiceSettings extends Record<string, any> = {},
   readonly brandColor?: string;
   readonly instanceLimit?: number;
   readonly hasFreeModels?: boolean;
-  readonly hasBackendCapFn?: (backendCapabilities: BackendCapabilities) => boolean; // used to show a 'green checkmark' in the list of vendors when adding services
-  readonly hasBackendCapKey?: keyof BackendCapabilities;
+  readonly hasServerConfigFn?: (backendCapabilities: BackendCapabilities) => boolean; // used to show a 'green checkmark' in the list of vendors when adding services
+  readonly hasServerConfigKey?: keyof BackendCapabilities;
 
   // components
   readonly Icon: React.FunctionComponent<SvgIconProps>;
